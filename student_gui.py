@@ -8,7 +8,7 @@ import re
 import sys
 import tkinter as tk
 from datetime import date, timedelta
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, simpledialog
 
 try:
     from openpyxl import Workbook, load_workbook
@@ -153,6 +153,7 @@ class App(tk.Tk):
         ttk.Button(top, text="新增学生", command=self.add_student).pack(side="left", padx=4)
         ttk.Button(top, text="修改学生", command=self.edit_student).pack(side="left", padx=4)
         ttk.Button(top, text="删除学生", command=self.delete_student).pack(side="left", padx=4)
+        ttk.Button(top, text="清空班级数据", command=self.clear_class_data).pack(side="left", padx=4)
         ttk.Label(top, text="  当前周（周一日期）：").pack(side="left")
         ttk.Entry(top, textvariable=self.week_var, width=12).pack(side="left")
         ttk.Button(top, text="切换周", command=self.change_week).pack(side="left", padx=4)
@@ -320,6 +321,29 @@ class App(tk.Tk):
         self.store.data["students"].remove(s)
         for records in self.store.data["weeks"].values(): records.pop(self.current_sid, None)
         self.current_sid = None; self.store.save(); self.status_var.set("请选择左侧学生"); self.refresh_classes(); self.refresh_students()
+
+    def clear_class_data(self):
+        classes = sorted({clean(s.get("班级", "")) for s in self.store.data["students"] if clean(s.get("班级", ""))})
+        if not classes:
+            messagebox.showinfo("提示", "当前没有可清空的班级数据"); return
+        class_name = simpledialog.askstring("清空班级数据", "请输入要清空的班级：\n" + "、".join(classes), parent=self)
+        if not class_name: return
+        class_name = class_name.strip()
+        targets = [s for s in self.store.data["students"] if clean(s.get("班级", "")) == class_name]
+        if not targets:
+            messagebox.showwarning("未找到班级", f"没有找到班级“{class_name}”"); return
+        if not messagebox.askyesno("第一次确认", f"将删除班级“{class_name}”的 {len(targets)} 名学生及全部周末登记。\n是否继续？", parent=self): return
+        confirm = simpledialog.askstring("第二次确认", f"此操作不可撤销。请输入班级名称 {class_name} 确认删除：", parent=self)
+        if not confirm or confirm.strip() != class_name:
+            messagebox.showinfo("已取消", "班级名称不一致，未删除任何数据"); return
+        ids = {s["学号"] for s in targets}
+        self.store.data["students"] = [s for s in self.store.data["students"] if s.get("学号") not in ids]
+        for records in self.store.data["weeks"].values():
+            for sid in ids: records.pop(sid, None)
+        self.current_sid = None; self.store.save(); self.status_var.set("请选择左侧学生")
+        if self.class_var.get() == class_name: self.class_var.set("全部班级")
+        self.refresh_classes(); self.refresh_students()
+        self.notice_var.set(f"通知栏：已清空班级 {class_name}，共删除 {len(targets)} 名学生及其周末登记")
 
     def import_xlsx(self):
         if not load_workbook: messagebox.showerror("缺少组件", "请先运行：python -m pip install openpyxl"); return

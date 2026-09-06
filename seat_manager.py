@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """离线班级座位与课堂发言管理系统。"""
-import json, os, re, random, shutil, tkinter as tk
+import json, os, re, random, shutil, sys, tkinter as tk
 from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk, simpledialog
 try:
@@ -23,7 +23,7 @@ try:
 except ImportError:
     Image = pytesseract = None
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 FILE = os.path.join(BASE, "seat_data.json")
 EVIDENCE_DIR = os.path.join(BASE, "evidence")
 ROWS = 8
@@ -96,8 +96,9 @@ class App(BaseTk):
         win=tk.Toplevel(self); win.title(f"学生详情 - {name}"); win.geometry("900x650"); win.grab_set()
         total=sum(int(v) for v in self.data["speech"].get(name,{}).values()); recent=self.data["speech"].get(name,{})
         homework=self.data.setdefault("homework",{}).setdefault(self.current_day,{})
-        missing_total=sum(len(info.get("missing",[])) for day in self.data.get("homework",{}).values() for info in day.values() if name in info.get("missing",[])); score=max(0,100-total*.5-int(s.get("迟到",0))-missing_total*2)
+        missing_total=sum(1 for day in self.data.get("homework",{}).values() for info in day.values() if name in info.get("missing",[]))
         sleep_recent=self.data.setdefault("sleep",{}).get(name,{}); sleep_total=sum(int(v) for v in sleep_recent.values())
+        score=max(0,100-total*.5-sleep_total*.5-int(s.get("迟到",0))-missing_total)
         text=f"姓名：{name}\n学号：{s.get('学号','')}\n性别：{s.get('性别','')}\n状态：{s.get('状态','正常')}\n纪律评分：{score:g}\n迟到次数：{s.get('迟到',0)}\n备注：{s.get('备注','')}\n座位：{seat}\n\n当天说话：{recent.get(self.current_day,0)} 次\n历史说话次数：***\n当天瞌睡：{sleep_recent.get(self.current_day,0)} 次　历史瞌睡：{sleep_total} 次\n最近记录：\n"+"\n".join(f"{d}：{n} 次" for d,n in sorted(recent.items(),reverse=True)[:7])
         content=tk.Frame(win); content.pack(fill="both",expand=True); left=tk.Frame(content,width=450); left.pack(side="left",fill="both",expand=True); right=tk.LabelFrame(content,text="本周作业",font=("Microsoft YaHei UI",13),padx=15,pady=10); right.pack(side="right",fill="both",expand=True,padx=10,pady=10)
         info_label=ttk.Label(left,text=text,justify="left",font=("Microsoft YaHei UI",13),padding=18); info_label.pack(anchor="nw")
