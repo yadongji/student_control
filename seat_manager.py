@@ -46,36 +46,48 @@ def save_data(data):
 
 class App(BaseTk):
     def __init__(self):
-        super().__init__(); self.title("班级座位与发言管理系统"); self.geometry("1400x820"); self.data=load_data(); self.buttons={}; self.current_day=date.today().isoformat(); self.drag_seat=None; self.search=tk.StringVar()
-        self.build(); self.draw_seats(); self.refresh_summary()
+        super().__init__(); self.title("班级座位与发言管理系统"); self.data=load_data(); self.buttons={}; self.current_day=date.today().isoformat(); self.drag_seat=None; self.search=tk.StringVar(); self._resize_job=None
+        screen_w,screen_h=self.winfo_screenwidth(),self.winfo_screenheight(); self.geometry(f"{max(900,screen_w-40)}x{max(600,screen_h-80)}+0+0"); self.minsize(800,560)
+        self.build(); self.draw_seats(); self.refresh_summary(); self.bind("<Configure>",self.schedule_responsive_layout)
+        try:self.state("zoomed")
+        except tk.TclError:pass
 
     def build(self):
-        top=ttk.Frame(self,padding=8); top.pack(fill="x")
-        ttk.Button(top,text="导入座次表 XLSX",command=self.import_xlsx).pack(side="left",padx=4)
-        ttk.Button(top,text="导出发言统计",command=self.export_report).pack(side="left",padx=4)
-        ttk.Button(top,text="今日发言清零",command=self.reset_today).pack(side="left",padx=4)
-        ttk.Button(top,text="发言排行榜",command=self.leaderboard).pack(side="left",padx=4)
-        ttk.Button(top,text="随机排座",command=self.random_seats).pack(side="left",padx=4)
-        ttk.Button(top,text="发布作业",command=self.publish_homework).pack(side="left",padx=4)
-        ttk.Button(top,text="今日未交作业名单",command=self.missing_homework).pack(side="left",padx=4)
-        ttk.Label(top,text="搜索：").pack(side="left",padx=(15,2)); e=ttk.Entry(top,textvariable=self.search,width=16); e.pack(side="left"); e.bind("<KeyRelease>",lambda _:self.paint())
-        ttk.Label(top,text="日期：").pack(side="left",padx=(20,2)); self.day_var=tk.StringVar(value=self.current_day); ttk.Entry(top,textvariable=self.day_var,width=12).pack(side="left")
-        ttk.Button(top,text="切换日期",command=self.change_day).pack(side="left",padx=4)
-        self.summary=ttk.Label(top,text="",font=("Microsoft YaHei UI",11)); self.summary.pack(side="right",padx=10)
-        note=ttk.Label(self,text="点击学生按钮查看详情；点击“记录一次发言”会增加当天次数。学生信息按姓名保存，与座位独立。",foreground="#555",padding=(10,0,10,8)); note.pack(anchor="w")
-        self.board=ttk.Frame(self,padding=10); self.board.pack(fill="both",expand=True)
+        top=ttk.Frame(self,padding=(6,5)); top.pack(fill="x")
+        row1=ttk.Frame(top); row1.pack(fill="x",pady=2); row2=ttk.Frame(top); row2.pack(fill="x",pady=2)
+        for text,command in (("导入座次表 XLSX",self.import_xlsx),("导出发言统计",self.export_report),("今日发言清零",self.reset_today),("发言排行榜",self.leaderboard),("随机排座",self.random_seats),("发布作业",self.publish_homework),("今日未交作业名单",self.missing_homework)):
+            ttk.Button(row1,text=text,command=command).pack(side="left",padx=3)
+        ttk.Label(row2,text="搜索：").pack(side="left",padx=(3,2)); e=ttk.Entry(row2,textvariable=self.search,width=18); e.pack(side="left"); e.bind("<KeyRelease>",lambda _:self.paint())
+        ttk.Label(row2,text="日期：").pack(side="left",padx=(15,2)); self.day_var=tk.StringVar(value=self.current_day); ttk.Entry(row2,textvariable=self.day_var,width=12).pack(side="left")
+        ttk.Button(row2,text="切换日期",command=self.change_day).pack(side="left",padx=3)
+        self.summary=ttk.Label(row2,text="",font=("Microsoft YaHei UI",10)); self.summary.pack(side="right",padx=8)
+        self.board=ttk.Frame(self,padding=(5,2,5,5)); self.board.pack(fill="both",expand=True); self.board.rowconfigure(0,weight=1)
 
     def draw_seats(self):
         for w in self.board.winfo_children(): w.destroy()
-        self.buttons={}; col=0
-        for name, width, height in SEAT_LAYOUT:
-            frame=ttk.LabelFrame(self.board,text=f"{name}区",padding=6); frame.grid(row=0,column=col,columnspan=width,padx=14 if col else 0,sticky="nsew")
+        self.buttons={}
+        for zone_index,(name, width, height) in enumerate(SEAT_LAYOUT):
+            self.board.columnconfigure(zone_index,weight=width,uniform="zones")
+            frame=ttk.LabelFrame(self.board,text=f"{name}区",padding=3); frame.grid(row=0,column=zone_index,padx=(0 if zone_index==0 else 10,0),sticky="nsew")
             for c in range(width): frame.columnconfigure(c,weight=1)
             for r in range(height):
                 frame.rowconfigure(r,weight=1)
                 for c in range(width):
-                    seat=f"{name}{r+1}-{c+1}"; b=tk.Button(frame,font=("Microsoft YaHei UI",10,"bold"),width=11,height=3,command=lambda s=seat:self.open_student(s)); b.grid(row=r,column=c,padx=3,pady=3,sticky="nsew"); b.bind("<ButtonPress-1>",lambda e,s=seat:self.drag_start(s)); b.bind("<ButtonRelease-1>",lambda e,s=seat:self.drag_end(s)); self.buttons[seat]=b
-            col+=width
+                    seat=f"{name}{r+1}-{c+1}"; b=tk.Button(frame,font=("Microsoft YaHei UI",10,"bold"),width=1,height=1,command=lambda s=seat:self.open_student(s)); b.grid(row=r,column=c,padx=2,pady=2,sticky="nsew"); b.bind("<ButtonPress-1>",lambda e,s=seat:self.drag_start(s)); b.bind("<ButtonRelease-1>",lambda e,s=seat:self.drag_end(s)); self.buttons[seat]=b
+        self.after_idle(self.apply_responsive_layout)
+
+    def schedule_responsive_layout(self,event=None):
+        if event is not None and event.widget is not self:return
+        if self._resize_job:self.after_cancel(self._resize_job)
+        self._resize_job=self.after(100,self.apply_responsive_layout)
+
+    def apply_responsive_layout(self):
+        self._resize_job=None; width=max(self.winfo_width(),800); height=max(self.winfo_height(),560)
+        cell_w=width/10; cell_h=max(35,(height-105)/8); font_size=max(7,min(12,int(min(cell_w/8,cell_h/5))))
+        gap=1 if width<1100 or height<700 else 2; wrap=max(55,int(cell_w-16))
+        for button in self.buttons.values():
+            button.configure(font=("Microsoft YaHei UI",font_size,"bold"),wraplength=wrap)
+            button.grid_configure(padx=gap,pady=gap)
 
     def student_for(self, seat):
         name=self.data["seats"].get(seat,""); return name,self.data["students"].get(name,{})
