@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """离线班级座位与课堂发言管理系统。"""
 import json, os, re, random, shutil, sys, tkinter as tk
+from copy import deepcopy
+from discipline import ACTIVITIES, activity_counts, discipline_score, record_activity, score_color, question_recorded
+from attendance import on_leave, expire_leaves
+from classroom_features import ClassroomFeatures
 from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk, simpledialog
 try:
@@ -44,11 +48,13 @@ def save_data(data):
     with open(FILE + ".tmp", "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(FILE + ".tmp", FILE)
 
-class App(BaseTk):
+class App(ClassroomFeatures, BaseTk):
     def __init__(self):
         super().__init__(); self.title("班级座位与发言管理系统"); self.data=load_data(); self.buttons={}; self.current_day=date.today().isoformat(); self.drag_seat=None; self.search=tk.StringVar(); self._resize_job=None
+        self._clock_day=self.current_day
         screen_w,screen_h=self.winfo_screenwidth(),self.winfo_screenheight(); self.geometry(f"{max(900,screen_w-40)}x{max(600,screen_h-80)}+0+0"); self.minsize(800,560)
         self.build(); self.draw_seats(); self.refresh_summary(); self.bind("<Configure>",self.schedule_responsive_layout)
+        self.after(1000, self.leave_tick)
         try:self.state("zoomed")
         except tk.TclError:pass
 
@@ -61,6 +67,7 @@ class App(BaseTk):
         ttk.Label(row2,text="日期：").pack(side="left",padx=(15,2)); self.day_var=tk.StringVar(value=self.current_day); ttk.Entry(row2,textvariable=self.day_var,width=12).pack(side="left")
         ttk.Button(row2,text="切换日期",command=self.change_day).pack(side="left",padx=3)
         self.summary=ttk.Label(row2,text="",font=("Microsoft YaHei UI",10)); self.summary.pack(side="right",padx=8)
+        self.build_feature_toolbar(top)
         self.board=ttk.Frame(self,padding=(5,2,5,5)); self.board.pack(fill="both",expand=True); self.board.rowconfigure(0,weight=1)
 
     def draw_seats(self):
@@ -83,7 +90,7 @@ class App(BaseTk):
 
     def apply_responsive_layout(self):
         self._resize_job=None; width=max(self.winfo_width(),800); height=max(self.winfo_height(),560)
-        cell_w=width/10; cell_h=max(35,(height-105)/8); font_size=max(7,min(12,int(min(cell_w/8,cell_h/5))))
+        cell_w=width/10; cell_h=max(35,(height-145)/8); font_size=max(7,min(12,int(min(cell_w/8,cell_h/6))))
         gap=1 if width<1100 or height<700 else 2; wrap=max(55,int(cell_w-16))
         for button in self.buttons.values():
             button.configure(font=("Microsoft YaHei UI",font_size,"bold"),wraplength=wrap)
@@ -94,8 +101,10 @@ class App(BaseTk):
     def paint(self):
         for seat,b in self.buttons.items():
             name,s=self.student_for(seat); count=int(self.data["speech"].get(name,{}).get(self.current_day,0)); gender=s.get("性别",""); q=self.search.get().strip().lower(); visible=not q or q in name.lower() or q in str(s.get("学号","")).lower()
-            status=s.get("状态",""); label=f"{name or '空座'}\n{'💬 '+str(count) if name else ''}{'\n'+status if status else ''}"
-            b.configure(text=label,bg="#b9dcff" if gender in ("男","男生","M") else ("#ffc4d6" if gender else "#e6e6e6"),activebackground="#8fc4fa",state="normal" if visible else "disabled")
+            absent=bool(name and on_leave(s)); score=discipline_score(self.data,name)
+            label=f"{name} {gender}\n纪律分：{score:g}\n💬 {count}　{'请假中' if absent else '在校中'}" if name else "空座"
+            color="#d3d3d3" if absent else score_color(score) if name else "#e6e6e6"
+            b.configure(text=label,bg=color,activebackground=color,fg="black",disabledforeground="#777777",highlightbackground="black",highlightcolor="black",highlightthickness=1,bd=1,relief="solid",state="normal" if visible and not absent else "disabled")
     def refresh_summary(self):
         total=sum(int(v.get(self.current_day,0)) for v in self.data["speech"].values()); self.summary.configure(text=f"{self.current_day} 发言总次数：{total}    学生：{len(self.data['students'])} 人"); self.paint()
     def change_day(self):
@@ -104,16 +113,20 @@ class App(BaseTk):
         self.current_day=self.day_var.get().strip(); self.refresh_summary()
     def open_student(self, seat):
         name,s=self.student_for(seat)
+        if name and on_leave(s): return
         if not name: messagebox.showinfo("空座","该座位尚未安排学生"); return
         win=tk.Toplevel(self); win.title(f"学生详情 - {name}"); win.geometry("900x650"); win.grab_set()
         total=sum(int(v) for v in self.data["speech"].get(name,{}).values()); recent=self.data["speech"].get(name,{})
         homework=self.data.setdefault("homework",{}).setdefault(self.current_day,{})
         missing_total=sum(1 for day in self.data.get("homework",{}).values() for info in day.values() if name in info.get("missing",[]))
         sleep_recent=self.data.setdefault("sleep",{}).get(name,{}); sleep_total=sum(int(v) for v in sleep_recent.values())
-        score=max(0,100-total*.5-sleep_total*.5-int(s.get("迟到",0))-missing_total)
-        text=f"姓名：{name}\n学号：{s.get('学号','')}\n性别：{s.get('性别','')}\n状态：{s.get('状态','正常')}\n纪律评分：{score:g}\n迟到次数：{s.get('迟到',0)}\n备注：{s.get('备注','')}\n座位：{seat}\n\n当天说话：{recent.get(self.current_day,0)} 次\n历史说话次数：***\n当天瞌睡：{sleep_recent.get(self.current_day,0)} 次　历史瞌睡：{sleep_total} 次\n最近记录：\n"+"\n".join(f"{d}：{n} 次" for d,n in sorted(recent.items(),reverse=True)[:7])
-        content=tk.Frame(win); content.pack(fill="both",expand=True); left=tk.Frame(content,width=450); left.pack(side="left",fill="both",expand=True); right=tk.LabelFrame(content,text="本周作业",font=("Microsoft YaHei UI",13),padx=15,pady=10); right.pack(side="right",fill="both",expand=True,padx=10,pady=10)
+        score=discipline_score(self.data,name)
+        text=f"姓名：{name}\n学号：{s.get('学号','')}\n性别：{s.get('性别','')}\n状态：在校中\n纪律评分：{score:g}\n迟到次数：{s.get('迟到',0)}\n备注：{s.get('备注','')}\n座位：{seat}\n\n当天说话：{recent.get(self.current_day,0)} 次\n历史说话次数：***\n当天瞌睡：{sleep_recent.get(self.current_day,0)} 次　历史瞌睡：{sleep_total} 次\n最近记录：\n"+"\n".join(f"{d}：{n} 次" for d,n in sorted(recent.items(),reverse=True)[:7])
+        content=self.detail_body(win); left=tk.Frame(content,width=450); left.pack(side="left",fill="both",expand=True); right=tk.LabelFrame(content,text="今日作业" if self.current_day==date.today().isoformat() else f"{self.current_day} 作业",font=("Microsoft YaHei UI",13),padx=15,pady=10); right.pack(side="right",fill="both",expand=True,padx=10,pady=10)
         info_label=ttk.Label(left,text=text,justify="left",font=("Microsoft YaHei UI",13),padding=18); info_label.pack(anchor="nw")
+        win.refresh_discipline = lambda: info_label.configure(text=(
+            text.replace(f"纪律评分：{score:g}", f"纪律评分：{discipline_score(self.data,name):g}")
+            .replace("历史说话次数：***", f"历史说话次数：{total} 次" if eye.get() else "历史说话次数：***")))
         hw_buttons={}
         for sub in SUBJECTS:
             if sub not in homework:
@@ -124,12 +137,15 @@ class App(BaseTk):
         eye=tk.BooleanVar(value=False); eye_btn=tk.Button(left,text="🙈",font=("Segoe UI Emoji",10),width=2,relief="flat")
         def eye_toggle():
             eye.set(not eye.get()); eye_btn.configure(text="👁" if eye.get() else "🙈")
-            info_label.configure(text=text.replace("历史说话次数：***", f"历史说话次数：{total} 次") if eye.get() else text)
+            win.refresh_discipline()
         eye_btn.configure(command=eye_toggle); eye_btn.place(in_=left,x=165,y=238)
         actions=tk.Frame(left); actions.pack(anchor="w",padx=18,pady=8)
         ttk.Button(actions,text="说话一次",command=lambda:self.add_speech(name,win)).pack(side="left",padx=3)
         ttk.Button(actions,text="迟到一次",command=lambda:self.add_late(name,win)).pack(side="left",padx=3)
         ttk.Button(actions,text="瞌睡一次",command=lambda:self.add_sleep(name,win)).pack(side="left",padx=3)
+        extra_actions=ttk.Frame(left); extra_actions.pack(anchor="w",padx=18,pady=5)
+        ttk.Button(extra_actions,text="成绩详情",command=lambda:self.grade_details(name)).pack(side="left",padx=3)
+        ttk.Button(extra_actions,text="请假",command=lambda:self.record_leave(name,win)).pack(side="left",padx=3)
         evidence_box=tk.LabelFrame(left,text="图片证据（拖入图片即记录一次；也可点击选择）",padx=8,pady=8); evidence_box.pack(fill="x",padx=18,pady=8)
         speech_drop=tk.Label(evidence_box,text="拖入说话证据图片",bg="#dceeff",height=3,cursor="hand2"); speech_drop.pack(side="left",fill="both",expand=True,padx=4)
         sleep_drop=tk.Label(evidence_box,text="拖入瞌睡证据图片",bg="#fff0c9",height=3,cursor="hand2"); sleep_drop.pack(side="left",fill="both",expand=True,padx=4)
@@ -138,12 +154,61 @@ class App(BaseTk):
             for widget,event_type in ((speech_drop,"说话"),(sleep_drop,"瞌睡")):
                 widget.drop_target_register(DND_FILES); widget.dnd_bind("<<Drop>>",lambda e,t=event_type:self.drop_evidence(e,name,t,win))
 
+        activity_box=ttk.LabelFrame(right,text="班级活动记录",padding=10)
+        activity_box.pack(fill="x",pady=(16,4))
+        counts_label=ttk.Label(activity_box,justify="left",font=("Microsoft YaHei UI",11))
+        counts_label.pack(anchor="w",pady=(0,8))
+        activity_status=tk.StringVar(value=f"记录日期：{self.current_day}")
+        activity_buttons={}
+        def refresh_activities():
+            counts=activity_counts(self.data,name)
+            counts_label.configure(text="\n".join(f"{kind}：{counts[kind]} 次（每次 {delta:+g} 分）" for kind,delta in ACTIVITIES.items()))
+            if "问问题" in activity_buttons:
+                activity_buttons["问问题"].configure(state="disabled" if question_recorded(self.data,name) else "normal",text="问问题（今日已加分）" if question_recorded(self.data,name) else "问问题一次 +0.5")
+            win.refresh_discipline()
+        activity_actions=ttk.Frame(activity_box); activity_actions.pack(fill="x")
+        for index,kind in enumerate(ACTIVITIES):
+            button=ttk.Button(activity_actions,text=f"{kind}一次 {ACTIVITIES[kind]:+g}",command=lambda k=kind:self.add_activity(name,k,win,refresh_activities,activity_status))
+            button.grid(row=index//2,column=index%2,sticky="ew",padx=2,pady=3); activity_buttons[kind]=button
+        activity_actions.columnconfigure(0,weight=1); activity_actions.columnconfigure(1,weight=1)
+        win.refresh_daily_actions=refresh_activities
+        ttk.Button(activity_box,text="查看活动明细",command=lambda:self.show_activity_history(name,win)).pack(fill="x",pady=3)
+        ttk.Label(activity_box,textvariable=activity_status,wraplength=320).pack(anchor="w",pady=5)
+        refresh_activities()
+
+    def add_activity(self,name,kind,win,refresh,status):
+        if on_leave(self.data["students"][name]): return
+        # 成功写入后再替换内存数据，磁盘写入失败不产生幽灵记录。
+        pending=deepcopy(self.data)
+        try:
+            record_activity(pending,name,kind,self.current_day)
+            save_data(pending)
+        except (OSError,ValueError) as exc:
+            messagebox.showerror("记录失败",str(exc),parent=win); return
+        self.data=pending
+        refresh()
+        status.set(f"已记录 {self.current_day} {kind}一次（{ACTIVITIES[kind]:+g} 分）")
+        self.refresh_summary()
+
+    def show_activity_history(self,name,parent):
+        win=tk.Toplevel(parent); win.title(f"{name} · 活动明细"); win.geometry("680x360")
+        columns=("记录日期","项目","分数变化","录入时间")
+        tree=ttk.Treeview(win,columns=columns,show="headings")
+        for col in columns:
+            tree.heading(col,text=col); tree.column(col,width=150,anchor="center")
+        scroll=ttk.Scrollbar(win,command=tree.yview); tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left",fill="both",expand=True); scroll.pack(side="right",fill="y")
+        for event in reversed(self.data.get("activities",{}).get(name,[])):
+            tree.insert("","end",values=(event["date"],event["type"],f"{event['points']:+g}",event["recorded_at"]))
+
     def edit_extra(self,name,win):
         s=self.data["students"].setdefault(name,{"姓名":name}); s["状态"]=simpledialog.askstring("状态","输入：正常 / 缺勤 / 请假",initialvalue=s.get("状态","正常"),parent=win) or s.get("状态","正常"); s["组别"]=simpledialog.askstring("小组","小组名称（可留空）",initialvalue=s.get("组别",""),parent=win) or s.get("组别",""); s["评分"]=simpledialog.askinteger("纪律评分","输入 0-100 分",initialvalue=int(s.get("评分",0)),minvalue=0,maxvalue=100,parent=win) or 0; s["备注"]=simpledialog.askstring("备注","纪律备注",initialvalue=s.get("备注",""),parent=win) or ""; save_data(self.data); win.destroy(); self.paint(); self.open_student(next(seat for seat,n in self.data["seats"].items() if n==name))
 
-    def drag_start(self,seat): self.drag_seat=seat
+    def drag_start(self,seat):
+        self.drag_seat=seat if self.buttons[seat].cget("state")=="normal" else None
     def drag_end(self,seat):
         if self.drag_seat and self.drag_seat!=seat:
+            if self.buttons[seat].cget("state") != "normal": self.drag_seat=None; return
             self.data["seats"][self.drag_seat],self.data["seats"][seat]=self.data["seats"].get(seat,""),self.data["seats"].get(self.drag_seat,""); save_data(self.data); self.paint()
         self.drag_seat=None
 
@@ -158,13 +223,16 @@ class App(BaseTk):
         for i,(n,s,total) in enumerate(rows,1): tree.insert("","end",values=(i,n,s,total))
         tree.pack(fill="both",expand=True,padx=10,pady=10)
     def add_speech(self,name,win=None):
+        if on_leave(self.data["students"][name]): return
         rec=self.data["speech"].setdefault(name,{}); rec[self.current_day]=int(rec.get(self.current_day,0))+1; save_data(self.data); self.refresh_summary()
         if win: win.destroy(); self.open_student(next(seat for seat,n in self.data["seats"].items() if n==name))
     def add_late(self,name,win=None):
-        s=self.data["students"].setdefault(name,{"姓名":name}); s["迟到"]=int(s.get("迟到",0))+1; save_data(self.data)
+        if on_leave(self.data["students"][name]): return
+        s=self.data["students"].setdefault(name,{"姓名":name}); s["迟到"]=int(s.get("迟到",0))+1; save_data(self.data); self.refresh_summary()
         if win: win.destroy(); self.open_student(next(seat for seat,n in self.data["seats"].items() if n==name))
     def add_sleep(self,name,win=None):
-        rec=self.data.setdefault("sleep",{}).setdefault(name,{}); rec[self.current_day]=int(rec.get(self.current_day,0))+1; save_data(self.data)
+        if on_leave(self.data["students"][name]): return
+        rec=self.data.setdefault("sleep",{}).setdefault(name,{}); rec[self.current_day]=int(rec.get(self.current_day,0))+1; save_data(self.data); self.refresh_summary()
         if win: win.destroy(); self.open_student(next(seat for seat,n in self.data["seats"].items() if n==name))
     def choose_evidence(self,name,event_type,win):
         path=filedialog.askopenfilename(parent=win,title=f"选择{event_type}证据图片",filetypes=[("图片","*.jpg;*.jpeg;*.png;*.bmp;*.webp")])
@@ -193,6 +261,8 @@ class App(BaseTk):
         if name in missing: missing.remove(name); button.configure(text="已交",bg="#55b96b")
         else: missing.append(name); button.configure(text="未交",bg="#f19a9a")
         save_data(self.data); self.refresh_summary()
+        refresh=getattr(button.winfo_toplevel(),"refresh_discipline",None)
+        if refresh: refresh()
     def homework_summary(self, subject=None):
         win=tk.Toplevel(self); win.title("作业统计"); win.geometry("560x430")
         for sub in SUBJECTS:
