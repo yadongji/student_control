@@ -1,0 +1,47 @@
+# Class-specific runtime data must never travel with application updates.
+seat*.json*
+student*.json*
+voice_settings*.json*
+leave_data*.json*
+attendance_data*.json*
+*.sqlite*
+*.db
+*.db-*
+*.db-journal
+*.log
+*.tmp
+*.update
+.env
+.env.*
+!.env.example
+
+# Personal records, evidence, backups and generated exports.
+backups/
+*_backups/
+wrongbook/
+evidence/
+exports/
+reports/
+voice_cache/
+audio_cache/
+local_data/
+
+# This repository distributes the portable EXE. Allow only release files in dist.
+# A new runtime file/folder is ignored by default, even if its name changes.
+/dist/*
+!/dist/学生综合管理系统.exe
+!/dist/01_直接打开教室系统.cmd
+!/dist/02_直接打开周末系统.cmd
+!/dist/成绩导入模板.xlsx
+!/dist/新版功能说明.md
+!/dist/错题管理使用说明.md
+!/dist/托盘与启动使用说明.md
+
+# Build/editor leftovers.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+build/
+.DS_Store
+Thumbs.db
